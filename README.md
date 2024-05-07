@@ -1,15 +1,15 @@
-## Disclaimer: Use of Unaudited Code for Educational Purposes Only
-This code is provided strictly for educational purposes and has not undergone any formal security audit. 
-It may contain errors, vulnerabilities, or other issues that could pose risks to the integrity of your system or data.
+**Flight Booking System Smart Contract Overview**
+The "flight_booking" module is a smart contract written in the Move programming language, designed to facilitate decentralized flight booking services. It provides functionalities for managing airlines, passengers, flight bookings, and financial transactions within the flight booking industry. Below is a detailed documentation of its components, purpose, features, setup, and interaction.
 
-By using this code, you acknowledge and agree that:
-- No Warranty: The code is provided "as is" without any warranty of any kind, either express or implied. The entire risk as to the quality and performance of the code is with you.
-- Educational Use Only: This code is intended solely for educational and learning purposes. It is not intended for use in any mission-critical or production systems.
-- No Liability: In no event shall the authors or copyright holders be liable for any claim, damages, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the use or performance of this code.
-- Security Risks: The code may not have been tested for security vulnerabilities. It is your responsibility to conduct a thorough security review before using this code in any sensitive or production environment.
-- No Support: The authors of this code may not provide any support, assistance, or updates. You are using the code at your own risk and discretion.
+## Purpose:
+The primary purpose of the "flight_booking" module is to establish a transparent and efficient system for booking and managing flights on a decentralized platform. It aims to streamline the process of booking flights, ensuring fairness, security, and accountability for both airlines and passengers.
 
-Before using this code, it is recommended to consult with a qualified professional and perform a comprehensive security assessment. By proceeding to use this code, you agree to assume all associated risks and responsibilities.
+## Features:
+1. **Airline Management:** Airlines can register and manage their flight offerings, set ticket prices, and track booking records.
+2. **Passenger Management:** Passengers can register, top-up their balances, and book flights based on availability and pricing.
+3. **Flight Booking:** Passengers can browse available flights, book them for specific dates, and pay ticket prices using their account balances.
+4. **Financial Transactions:** The contract handles financial transactions, including deducting ticket prices from passenger balances and transferring them to the airline's account.
+5. **Ownership Transfer:** The contract allows for the transfer of flight ownership between airlines and passengers, enabling smooth transitions in ownership rights.
 
 ## Setup
 
@@ -69,7 +69,10 @@ cargo install --locked --git https://github.com/MystenLabs/sui.git --branch test
 cargo install --git https://github.com/move-language/move move-analyzer --branch sui-move --features "address32"
 
 ```
+## Interaction:
+After setting up the environment and deploying the smart contract, users can interact with it through various CLI commands. These commands include creating airlines, registering passengers, adding flight offerings, booking flights, topping up passenger balances, transferring flight ownership, and withdrawing funds. Each interaction follows a specific protocol, involving parameters such as airline IDs, passenger IDs, flight IDs, booking dates, and financial amounts.
 
+Overall, the "flight_booking" smart contract module provides a robust framework for establishing and managing decentralized flight booking services. It promotes efficiency, transparency, and fairness in the flight booking industry while ensuring smooth transactions and ownership transfers between airlines and passengers.
 ### Run a local network
 To run a local network with a pre-built binary (recommended way), run this command:
 ```

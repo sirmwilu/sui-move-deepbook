@@ -1,222 +1,277 @@
-/*
-Disclaimer: Use of Unaudited Code for Educational Purposes Only
-This code is provided strictly for educational purposes and has not undergone any formal security audit. 
-It may contain errors, vulnerabilities, or other issues that could pose risks to the integrity of your system or data.
+#[allow(unused_use)]
+/// This module contains the implementation of the flight booking system.
+/// It defines the data structures and functions necessary for creating airlines, passengers,
+/// booking flights, and managing balances.
+module flight_booking::flight_booking {
 
-By using this code, you acknowledge and agree that:
-    - No Warranty: The code is provided "as is" without any warranty of any kind, either express or implied. The entire risk as to the quality and performance of the code is with you.
-    - Educational Use Only: This code is intended solely for educational and learning purposes. It is not intended for use in any mission-critical or production systems.
-    - No Liability: In no event shall the authors or copyright holders be liable for any claim, damages, or other liability, whether in an action of contract, tort, or otherwise, arising from, out of, or in connection with the use or performance of this code.
-    - Security Risks: The code may not have been tested for security vulnerabilities. It is your responsibility to conduct a thorough security review before using this code in any sensitive or production environment.
-    - No Support: The authors of this code may not provide any support, assistance, or updates. You are using the code at your own risk and discretion.
-
-Before using this code, it is recommended to consult with a qualified professional and perform a comprehensive security assessment. By proceeding to use this code, you agree to assume all associated risks and responsibilities.
-*/
-
-#[lint_allow(self_transfer)]
-module dacade_deepbook::book {
-    use deepbook::clob_v2 as deepbook;
-    use deepbook::custodian_v2 as custodian;
+    // Imports
+    use sui::transfer;
     use sui::sui::SUI;
-    use sui::tx_context::{TxContext, Self};
-    use sui::coin::{Coin, Self};
-    use sui::balance::{Self};
-    use sui::transfer::Self;
-    use sui::clock::Clock;
+    use std::string::{Self, String};
+    use sui::coin::{Self, Coin};
+    use sui::clock::{Self, Clock};
+    use sui::object::{Self, UID, ID};
+    use sui::balance::{Self, Balance};
+    use sui::tx_context::{Self, TxContext};
+    use sui::table::{Self, Table};
 
-    const FLOAT_SCALING: u64 = 1_000_000_000;
+    // Errors
+    const EInsufficientFunds: u64 = 1;
+    const EInvalidCoin: u64 = 2;
+    const ENotPassenger: u64 = 3;
+    const EInvalidFlight: u64 = 4;
+    const ENotAirline: u64 = 5;
+    const EInvalidFlightBooking: u64 = 6;
 
+    // FlightBooking Airline 
 
-    public fun new_pool<Base, Quote>(payment: &mut Coin<SUI>, ctx: &mut TxContext) {
-        let balance = coin::balance_mut(payment);
-        let fee = balance::split(balance, 100 * 1_000_000_000);
-        let coin = coin::from_balance(fee, ctx);
-
-        deepbook::create_pool<Base, Quote>(
-            1 * FLOAT_SCALING,
-            1,
-            coin,
-            ctx
-        );
+    /// Represents an airline in the flight booking system.
+    struct Airline has key {
+        id: UID,
+        name: String,
+        flight_prices: Table<ID, u64>, // flight_id -> price
+        balance: Balance<SUI>,
+        memos: Table<ID, FlightMemo>, // flight_id -> memo
+        airline: address
     }
 
-    public fun new_custodian_account(ctx: &mut TxContext) {
-        transfer::public_transfer(deepbook::create_account(ctx), tx_context::sender(ctx))
+    // Passenger
+
+    /// Represents a passenger in the flight booking system.
+    struct Passenger has key {
+        id: UID,
+        name: String,
+        passenger: address,
+        airline_id: ID,
+        balance: Balance<SUI>,
     }
 
-    public fun make_base_deposit<Base, Quote>(pool: &mut deepbook::Pool<Base, Quote>, coin: Coin<Base>, account_cap: &custodian::AccountCap) {
-        deepbook::deposit_base(pool, coin, account_cap)
+    // FlightMemo
+
+    /// Represents a memo for a flight in the flight booking system.
+    struct FlightMemo has key, store {
+        id: UID,
+        flight_id: ID,
+        ticket_price: u64,
+        airline: address 
     }
 
-    public fun make_quote_deposit<Base, Quote>(pool: &mut deepbook::Pool<Base, Quote>, coin: Coin<Quote>, account_cap: &custodian::AccountCap) {
-        deepbook::deposit_quote(pool, coin, account_cap)
+    // Flight
+
+    /// Represents a flight in the flight booking system.
+    struct Flight has key {
+        id: UID,
+        flight_number: String,
+        destination : String,
+        departure_time: u64,
+        airline: address,
+        available_seats: u64,
     }
 
-    public fun withdraw_base<BaseAsset, QuoteAsset>(
-        pool: &mut deepbook::Pool<BaseAsset, QuoteAsset>,
-        quantity: u64,
-        account_cap: &custodian::AccountCap,
+    // Record of Flight Booking
+
+    /// Represents a booking record in the flight booking system.
+    struct BookingRecord has key, store {
+        id: UID,
+        passenger_id: ID,
+        flight_id: ID,
+        passenger: address,
+        airline: address,
+        paid_amount: u64,
+        ticket_price: u64,
+        booking_time: u64
+    }
+
+    // Create a new Airline object 
+
+    /// Creates a new airline object with the given name.
+    /// The airline object is added to the shared object pool.
+    public fun create_airline(ctx:&mut TxContext, name: String) {
+        let airline = Airline {
+            id: object::new(ctx),
+            name: name,
+            flight_prices: table::new<ID, u64>(ctx),
+            balance: balance::zero<SUI>(),
+            memos: table::new<ID, FlightMemo>(ctx),
+            airline: tx_context::sender(ctx)
+        };
+
+        transfer::share_object(airline);
+    }
+
+    // Create a new Passenger object
+
+    /// Creates a new passenger object with the given name and airline address.
+    /// The passenger object is added to the shared object pool.
+    public fun create_passenger(ctx:&mut TxContext, name: String, airline_address: address) {
+        let airline_id_: ID = object::id_from_address(airline_address);
+        let passenger = Passenger {
+            id: object::new(ctx),
+            name: name,
+            passenger: tx_context::sender(ctx),
+            airline_id: airline_id_,
+            balance: balance::zero<SUI>(),
+        };
+
+        transfer::share_object(passenger);
+    }
+
+    // create a memo for a flight
+
+    /// Creates a memo for a flight and adds it to the airline's memo table.
+    /// Returns the created flight object.
+    public fun create_flight_memo(
+        airline: &mut Airline,
+        ticket_price: u64,
+        flight_number: String,
+        destination: String,
+        departure_time: u64,
         ctx: &mut TxContext
-    ) {
-        let base = deepbook::withdraw_base(pool, quantity, account_cap, ctx);
-        transfer::public_transfer(base, tx_context::sender(ctx));
+    ): Flight {
+        assert!(airline.airline == tx_context::sender(ctx), ENotAirline);
+        let flight = Flight {
+            id: object::new(ctx),
+            flight_number: flight_number,
+            destination: destination,
+            departure_time: departure_time,
+            airline: airline.airline,
+            available_seats: 100 // Assuming each flight initially has 100 available seats
+        };
+        let memo = FlightMemo {
+            id: object::new(ctx),
+            flight_id: object::uid_to_inner(&flight.id),
+            ticket_price: ticket_price,
+            airline: airline.airline
+        };
+
+        table::add<ID, FlightMemo>(&mut airline.memos, object::uid_to_inner(&flight.id), memo);
+
+        flight
     }
 
-    public fun withdraw_quote<BaseAsset, QuoteAsset>(
-        pool: &mut deepbook::Pool<BaseAsset, QuoteAsset>,
-        quantity: u64,
-        account_cap: &custodian::AccountCap,
-        ctx: &mut TxContext
-    ) {
-        let quote = deepbook::withdraw_quote(pool, quantity, account_cap, ctx);
-        transfer::public_transfer(quote, tx_context::sender(ctx));
-    }
+    // Book a flight
 
-    public fun place_limit_order<Base, Quote>(
-        pool: &mut deepbook::Pool<Base, Quote>,
-        client_order_id: u64,
-        price: u64, 
-        quantity: u64, 
-        self_matching_prevention: u8,
-        is_bid: bool,
-        expire_timestamp: u64,
-        restriction: u8,
-        clock: &Clock,
-        account_cap: &custodian::AccountCap,
-        ctx: &mut TxContext
-    ): (u64, u64, bool, u64) {
-        deepbook::place_limit_order(
-            pool, 
-            client_order_id, 
-            price, 
-            quantity, 
-            self_matching_prevention, 
-            is_bid, 
-            expire_timestamp, 
-            restriction, 
-            clock, 
-            account_cap, 
-            ctx
-        )
-    }
-
-    public fun place_base_market_order<Base, Quote>(
-        pool: &mut deepbook::Pool<Base, Quote>,
-        account_cap: &custodian::AccountCap,
-        base_coin: Coin<Base>,
-        client_order_id: u64,
-        is_bid: bool,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ) {
-        let quote_coin = coin::zero<Quote>(ctx);
-        let quantity = coin::value(&base_coin);
-        place_market_order(
-            pool,
-            account_cap,
-            client_order_id,
-            quantity,
-            is_bid,
-            base_coin,
-            quote_coin,
-            clock,
-            ctx
-        )
-    }
-
-    public fun place_quote_market_order<Base, Quote>(
-        pool: &mut deepbook::Pool<Base, Quote>,
-        account_cap: &custodian::AccountCap,
-        quote_coin: Coin<Quote>,
-        client_order_id: u64,
-        is_bid: bool,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ) {
-        let base_coin = coin::zero<Base>(ctx);
-        let quantity = coin::value(&quote_coin);
-        place_market_order(
-            pool,
-            account_cap,
-            client_order_id,
-            quantity,
-            is_bid,
-            base_coin,
-            quote_coin,
-            clock,
-            ctx
-        )
-    }
-
-    fun place_market_order<Base, Quote>(
-        pool: &mut deepbook::Pool<Base, Quote>,
-        account_cap: &custodian::AccountCap,
-        client_order_id: u64,
-        quantity: u64,
-        is_bid: bool,
-        base_coin: Coin<Base>,
-        quote_coin: Coin<Quote>,
-        clock: &Clock, // @0x6 hardcoded id of the Clock object
-        ctx: &mut TxContext,
-    ) {
-        let (base, quote) = deepbook::place_market_order(
-            pool, 
-            account_cap, 
-            client_order_id, 
-            quantity, 
-            is_bid, 
-            base_coin, 
-            quote_coin, 
-            clock, 
-            ctx
-        );
-        transfer::public_transfer(base, tx_context::sender(ctx));
-        transfer::public_transfer(quote, tx_context::sender(ctx));
-    }
-
-    public fun swap_exact_base_for_quote<Base, Quote>(
-        pool: &mut deepbook::Pool<Base, Quote>,
-        client_order_id: u64,
-        account_cap: &custodian::AccountCap,
-        quantity: u64,
-        base_coin: Coin<Base>,
+    /// Books a flight for a passenger and updates the booking record and balances.
+    /// Returns the payment amount as a Coin<SUI>.
+    public fun book_flight(
+        airline: &mut Airline,
+        passenger: &mut Passenger,
+        flight: &mut Flight,
+        flight_memo_id: ID,
         clock: &Clock,
         ctx: &mut TxContext
-    ) {
-        let quote_coin = coin::zero<Quote>(ctx);
-        let (base, quote, _) = deepbook::swap_exact_base_for_quote(
-            pool,
-            client_order_id,
-            account_cap,
-            quantity,
-            base_coin,
-            quote_coin,
-            clock,
-            ctx
-        );
-        transfer::public_transfer(base, tx_context::sender(ctx));
-        transfer::public_transfer(quote, tx_context::sender(ctx));
+    ): Coin<SUI> {
+        assert!(airline.airline == tx_context::sender(ctx), ENotAirline);
+        assert!(passenger.airline_id == object::id_from_address(airline.airline), ENotPassenger);
+        assert!(table::contains<ID, FlightMemo>(&airline.memos, flight_memo_id), EInvalidFlightBooking);
+        assert!(flight.airline == airline.airline, EInvalidFlight);
+        assert!(flight.available_seats > 0, EInvalidFlight);
+        let flight_id = &flight.id;
+        let memo = table::borrow<ID, FlightMemo>(&airline.memos, flight_memo_id);
+
+        let passenger_id = object::uid_to_inner(&passenger.id);
+        
+        let ticket_price = memo.ticket_price;
+        let booking_time = clock::timestamp_ms(clock);
+        let booking_record = BookingRecord {
+            id: object::new(ctx),
+            passenger_id:passenger_id ,
+            flight_id: object::uid_to_inner(flight_id),
+            passenger: passenger.passenger,
+            airline: airline.airline,
+            paid_amount: ticket_price,
+            ticket_price: ticket_price,
+            booking_time: booking_time
+        };
+
+        transfer::public_freeze_object(booking_record);
+        // deduct the ticket price from the passenger balance and add it to the airline balance
+        assert!(ticket_price <= balance::value(&passenger.balance), EInsufficientFunds);
+        let amount_to_pay = coin::take(&mut passenger.balance, ticket_price, ctx);
+        let same_amount_to_pay = coin::take(&mut passenger.balance, ticket_price, ctx);
+        assert!(coin::value(&amount_to_pay) > 0, EInvalidCoin);
+        assert!(coin::value(&same_amount_to_pay) > 0, EInvalidCoin);
+
+        transfer::public_transfer(amount_to_pay, airline.airline);
+
+        same_amount_to_pay
     }
 
-    public fun swap_exact_quote_for_base<Base, Quote>(
-        pool: &mut deepbook::Pool<Base, Quote>,
-        account_cap: &custodian::AccountCap,
-        quote_coin: Coin<Quote>,
-        client_order_id: u64,
-        quantity: u64,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ) {
-        let (base, quote, _) = deepbook::swap_exact_quote_for_base(
-            pool,
-            client_order_id,
-            account_cap,
-            quantity,
-            clock,
-            quote_coin,
-            ctx
-        );
-        transfer::public_transfer(base, tx_context::sender(ctx));
-        transfer::public_transfer(quote, tx_context::sender(ctx));
+    // Passenger adding funds to their account
+
+    /// Adds funds to the passenger's balance.
+    public fun top_up_passenger_balance(
+        passenger: &mut Passenger,
+        amount: Coin<SUI>,
+        ctx: &mut TxContext
+    ){
+        assert!(passenger.passenger == tx_context::sender(ctx), ENotPassenger);
+        balance::join(&mut passenger.balance, coin::into_balance(amount));
     }
+
+    // add the Payment fee to the airline balance
+
+    /// Adds the payment fee to the airline's balance.
+    public fun top_up_airline_balance(
+        airline: &mut Airline,
+        passenger: &mut Passenger,
+        flight: &mut Flight,
+        flight_memo_id: ID,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ){
+        // Can only be called by the passenger
+        assert!(passenger.passenger == tx_context::sender(ctx), ENotPassenger);
+        let (amount_to_pay) = book_flight(airline, passenger, flight, flight_memo_id, clock, ctx);
+        balance::join(&mut airline.balance, coin::into_balance(amount_to_pay));
+    }
+
+    // Get the balance of the airline
+
+    /// Returns a reference to the balance of the airline.
+    public fun get_airline_balance(airline: &Airline) : &Balance<SUI> {
+        &airline.balance
+    }
+
+    // Airline can withdraw the balance
+
+    /// Allows the airline to withdraw funds from its balance.
+    public fun withdraw_funds(
+        airline: &mut Airline,
+        amount: u64,
+        ctx: &mut TxContext
+    ){
+        assert!(airline.airline == tx_context::sender(ctx), ENotAirline);
+        assert!(amount <= balance::value(&airline.balance), EInsufficientFunds);
+        let amount_to_withdraw = coin::take(&mut airline.balance, amount, ctx);
+        transfer::public_transfer(amount_to_withdraw, airline.airline);
+    }
+    
+    // Transfer the Ownership of the flight to the passenger
+
+    /// Transfers the ownership of a flight to a passenger.
+    public entry fun transfer_flight_ownership(
+        passenger: &Passenger,
+        flight: Flight,
+    ){
+        transfer::transfer(flight, passenger.passenger);
+    }
+
+
+    // Passenger Returns the flight ownership
+    // Increase the available seats in the flight
+
+    /// Returns the ownership of a flight by a passenger and increases the available seats.
+    public fun return_flight(
+        airline: &mut Airline,
+        passenger: &mut Passenger,
+        flight: &mut Flight,
+        ctx: &mut TxContext
+    ) {
+        assert!(airline.airline == tx_context::sender(ctx), ENotAirline);
+        assert!(passenger.airline_id == object::id_from_address(airline.airline), ENotPassenger);
+        assert!(flight.airline == airline.airline, EInvalidFlight);
+
+        flight.available_seats = flight.available_seats + 1;
+    }  
 }
