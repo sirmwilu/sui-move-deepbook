@@ -274,4 +274,26 @@ module flight_booking::flight_booking {
 
         flight.available_seats = flight.available_seats + 1;
     }  
+    // Get the balance of the passenger
+    /// Returns a reference to the balance of the passenger.
+    public fun get_passenger_balance(passenger: &Passenger) : &Balance<SUI> {
+        &passenger.balance
+    }
+    // Accessor for getting the flight prices table of an airline
+    /// Returns a reference to the flight prices table of an airline.
+    public fun get_flight_prices(airline: &Airline) : &Table<ID, u64> {
+        &airline.flight_prices
+    }
+
+    // Accessor for getting the memos table of an airline
+    /// Returns a reference to the memos table of an airline.
+    public fun get_memos(airline: &Airline) : &Table<ID, FlightMemo> {
+        &airline.memos
+    }
+
+    // Accessor for getting the available seats of a flight
+    /// Returns the number of available seats in a flight.
+    public fun get_available_seats(flight: &Flight) : u64 {
+        flight.available_seats
+    }
 }
