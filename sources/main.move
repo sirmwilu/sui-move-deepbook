@@ -22,6 +22,7 @@ module flight_booking::flight_booking {
     const EInvalidFlight: u64 = 4;
     const ENotAirline: u64 = 5;
     const EInvalidFlightBooking: u64 = 6;
+    const EInvalidWithdrawalAmount: u64 = 7;
 
     // FlightBooking Airline 
 
@@ -104,6 +105,9 @@ module flight_booking::flight_booking {
     /// Creates a new passenger object with the given name and airline address.
     /// The passenger object is added to the shared object pool.
     public fun create_passenger(ctx:&mut TxContext, name: String, airline_address: address) {
+        assert!(tx_context::is_valid_address(&airline_address), ENotAirline);
+        assert!(string::length(&name) >= 3, EInvalidInput); // Add input validation for name
+
         let airline_id_: ID = object::id_from_address(airline_address);
         let passenger = Passenger {
             id: object::new(ctx),
@@ -126,6 +130,7 @@ module flight_booking::flight_booking {
         flight_number: String,
         destination: String,
         departure_time: u64,
+        initial_available_seats: u64, // Make initial available seats configurable
         ctx: &mut TxContext
     ): Flight {
         assert!(airline.airline == tx_context::sender(ctx), ENotAirline);
@@ -135,7 +140,7 @@ module flight_booking::flight_booking {
             destination: destination,
             departure_time: departure_time,
             airline: airline.airline,
-            available_seats: 100 // Assuming each flight initially has 100 available seats
+            available_seats: initial_available_seats
         };
         let memo = FlightMemo {
             id: object::new(ctx),
@@ -173,6 +178,12 @@ module flight_booking::flight_booking {
         
         let ticket_price = memo.ticket_price;
         let booking_time = clock::timestamp_ms(clock);
+
+        // Perform balance checks before creating the BookingRecord
+        assert!(ticket_price <= balance::value(&passenger.balance), EInsufficientFunds);
+        let amount_to_pay = coin::take(&mut passenger.balance, ticket_price, ctx);
+        assert!(coin::value(&amount_to_pay) > 0, EInvalidCoin);
+
         let booking_record = BookingRecord {
             id: object::new(ctx),
             passenger_id:passenger_id ,
@@ -185,16 +196,12 @@ module flight_booking::flight_booking {
         };
 
         transfer::public_freeze_object(booking_record);
-        // deduct the ticket price from the passenger balance and add it to the airline balance
-        assert!(ticket_price <= balance::value(&passenger.balance), EInsufficientFunds);
-        let amount_to_pay = coin::take(&mut passenger.balance, ticket_price, ctx);
-        let same_amount_to_pay = coin::take(&mut passenger.balance, ticket_price, ctx);
-        assert!(coin::value(&amount_to_pay) > 0, EInvalidCoin);
-        assert!(coin::value(&same_amount_to_pay) > 0, EInvalidCoin);
 
         transfer::public_transfer(amount_to_pay, airline.airline);
 
-        same_amount_to_pay
+        flight.available_seats = flight.available_seats - 1;
+
+        amount_to_pay
     }
 
     // Passenger adding funds to their account
@@ -207,93 +214,99 @@ module flight_booking::flight_booking {
     ){
         assert!(passenger.passenger == tx_context::sender(ctx), ENotPassenger);
         balance::join(&mut passenger.balance, coin::into_balance(amount));
-    }
+}
+// add the Payment fee to the airline balance
 
-    // add the Payment fee to the airline balance
+/// Adds the payment fee to the airline's balance.
+public fun top_up_airline_balance(
+    airline: &mut Airline,
+    passenger: &mut Passenger,
+    flight: &mut Flight,
+    flight_memo_id: ID,
+    clock: &Clock,
+    ctx: &mut TxContext
+){
+    // Can only be called by the passenger
+    assert!(passenger.passenger == tx_context::sender(ctx), ENotPassenger);
+    let amount_to_pay = book_flight(airline, passenger, flight, flight_memo_id, clock, ctx);
+    balance::join(&mut airline.balance, coin::into_balance(amount_to_pay));
+}
 
-    /// Adds the payment fee to the airline's balance.
-    public fun top_up_airline_balance(
-        airline: &mut Airline,
-        passenger: &mut Passenger,
-        flight: &mut Flight,
-        flight_memo_id: ID,
-        clock: &Clock,
-        ctx: &mut TxContext
-    ){
-        // Can only be called by the passenger
-        assert!(passenger.passenger == tx_context::sender(ctx), ENotPassenger);
-        let (amount_to_pay) = book_flight(airline, passenger, flight, flight_memo_id, clock, ctx);
-        balance::join(&mut airline.balance, coin::into_balance(amount_to_pay));
-    }
+// Get the balance of the airline
 
-    // Get the balance of the airline
+/// Returns a reference to the balance of the airline.
+public fun get_airline_balance(airline: &Airline) : &Balance<SUI> {
+    &airline.balance
+}
 
-    /// Returns a reference to the balance of the airline.
-    public fun get_airline_balance(airline: &Airline) : &Balance<SUI> {
-        &airline.balance
-    }
+// Airline can withdraw the balance
 
-    // Airline can withdraw the balance
+/// Allows the airline to withdraw funds from its balance.
+public fun withdraw_funds(
+    airline: &mut Airline,
+    amount: u64,
+    ctx: &mut TxContext
+){
+    assert!(airline.airline == tx_context::sender(ctx), ENotAirline);
+    assert!(amount <= balance::value(&airline.balance), EInsufficientFunds);
+    assert!(amount <= 1000000, EInvalidWithdrawalAmount); // Add a reasonable limit for withdrawal amount
+    let amount_to_withdraw = coin::take(&mut airline.balance, amount, ctx);
+    transfer::public_transfer(amount_to_withdraw, airline.airline);
+}
 
-    /// Allows the airline to withdraw funds from its balance.
-    public fun withdraw_funds(
-        airline: &mut Airline,
-        amount: u64,
-        ctx: &mut TxContext
-    ){
-        assert!(airline.airline == tx_context::sender(ctx), ENotAirline);
-        assert!(amount <= balance::value(&airline.balance), EInsufficientFunds);
-        let amount_to_withdraw = coin::take(&mut airline.balance, amount, ctx);
-        transfer::public_transfer(amount_to_withdraw, airline.airline);
-    }
-    
-    // Transfer the Ownership of the flight to the passenger
+// Transfer the Ownership of the flight to the passenger
 
-    /// Transfers the ownership of a flight to a passenger.
-    public entry fun transfer_flight_ownership(
-        passenger: &Passenger,
-        flight: Flight,
-    ){
-        transfer::transfer(flight, passenger.passenger);
-    }
+/// Transfers the ownership of a flight to a passenger.
+public entry fun transfer_flight_ownership(
+    passenger: &Passenger,
+    flight: Flight,
+    ctx: &mut TxContext
+){
+    assert!(passenger.passenger == tx_context::sender(ctx), ENotPassenger); // Add access control check
+    transfer::transfer(flight, passenger.passenger);
+}
 
 
-    // Passenger Returns the flight ownership
-    // Increase the available seats in the flight
+// Passenger Returns the flight ownership
+// Increase the available seats in the flight
 
-    /// Returns the ownership of a flight by a passenger and increases the available seats.
-    public fun return_flight(
-        airline: &mut Airline,
-        passenger: &mut Passenger,
-        flight: &mut Flight,
-        ctx: &mut TxContext
-    ) {
-        assert!(airline.airline == tx_context::sender(ctx), ENotAirline);
-        assert!(passenger.airline_id == object::id_from_address(airline.airline), ENotPassenger);
-        assert!(flight.airline == airline.airline, EInvalidFlight);
+/// Returns the ownership of a flight by a passenger and increases the available seats.
+public fun return_flight(
+    airline: &mut Airline,
+    passenger: &mut Passenger,
+    flight: &mut Flight,
+    ctx: &mut TxContext
+) {
+    assert!(airline.airline == tx_context::sender(ctx), ENotAirline);
+    assert!(passenger.airline_id == object::id_from_address(airline.airline), ENotPassenger);
+    assert!(flight.airline == airline.airline, EInvalidFlight);
 
-        flight.available_seats = flight.available_seats + 1;
-    }  
-    // Get the balance of the passenger
-    /// Returns a reference to the balance of the passenger.
-    public fun get_passenger_balance(passenger: &Passenger) : &Balance<SUI> {
-        &passenger.balance
-    }
-    // Accessor for getting the flight prices table of an airline
-    /// Returns a reference to the flight prices table of an airline.
-    public fun get_flight_prices(airline: &Airline) : &Table<ID, u64> {
-        &airline.flight_prices
-    }
+    // Add a check to ensure the flight ownership is transferred back to the airline
+    transfer::transfer(flight, airline.airline);
 
-    // Accessor for getting the memos table of an airline
-    /// Returns a reference to the memos table of an airline.
-    public fun get_memos(airline: &Airline) : &Table<ID, FlightMemo> {
-        &airline.memos
-    }
+    flight.available_seats = flight.available_seats + 1;
+}  
 
-    // Accessor for getting the available seats of a flight
-    /// Returns the number of available seats in a flight.
-    public fun get_available_seats(flight: &Flight) : u64 {
-        flight.available_seats
-    }
+// Get the balance of the passenger
+/// Returns a reference to the balance of the passenger.
+public fun get_passenger_balance(passenger: &Passenger) : &Balance<SUI> {
+    &passenger.balance
+}
+
+// Accessor for getting the flight prices table of an airline
+/// Returns a reference to the flight prices table of an airline.
+public fun get_flight_prices(airline: &Airline) : &Table<ID, u64> {
+    &airline.flight_prices
+}
+
+// Accessor for getting the memos table of an airline
+/// Returns a reference to the memos table of an airline.
+public fun get_memos(airline: &Airline) : &Table<ID, FlightMemo> {
+    &airline.memos
+}
+
+// Accessor for getting the available seats of a flight
+/// Returns the number of available seats in a flight.
+public fun get_available_seats(flight: &Flight) : u64 {
+    flight.available_seats
 }
